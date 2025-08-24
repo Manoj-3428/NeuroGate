@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">NeuroGate</string>
+    <string name="accessibility_service_description">NeuroGate monitors text input across all apps to detect potential AI misuse and provides real-time warnings with category-specific notifications.</string>
+</resources>

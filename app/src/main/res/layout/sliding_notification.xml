@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notificationBackground"
+    android:layout_width="300dp"
+    android:layout_height="wrap_content"
+    android:minHeight="200dp"
+    android:orientation="vertical"
+    android:padding="20dp"
+    android:layout_margin="16dp"
+    android:background="@drawable/notification_background"
+    android:elevation="20dp">
+
+    <!-- Header with Icon and Title -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="8dp">
+
+        <!-- Category Icon -->
+        <TextView
+            android:id="@+id/categoryIcon"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:text="⚠️"
+            android:textSize="28sp"
+            android:gravity="center"
+            android:background="@drawable/icon_background"
+            android:layout_marginEnd="16dp" />
+
+        <!-- Title and Description -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/categoryTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Content Detected"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="@android:color/white"
+                android:layout_marginBottom="6dp" />
+
+            <TextView
+                android:id="@+id/categoryDescription"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Potential misuse detected"
+                android:textSize="16sp"
+                android:textColor="@android:color/white"
+                android:alpha="0.9" />
+
+        </LinearLayout>
+
+        <!-- Close Button -->
+        <ImageButton
+            android:id="@+id/closeButton"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:src="@drawable/ic_close"
+            android:background="@android:color/transparent"
+            android:tint="@android:color/white"
+            android:alpha="0.8" />
+
+    </LinearLayout>
+
+    <!-- Suggestion Text -->
+    <TextView
+        android:id="@+id/suggestionText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Please review your content and consider alternatives"
+        android:textSize="15sp"
+        android:textColor="@android:color/white"
+        android:alpha="0.8"
+        android:background="@drawable/suggestion_background"
+        android:padding="16dp"
+        android:layout_marginTop="12dp"
+        android:drawableStart="@drawable/ic_info"
+        android:drawablePadding="10dp"
+        android:gravity="center_vertical" />
+
+    <!-- Progress Bar for Auto-hide -->
+    <ProgressBar
+        android:id="@+id/autoHideProgress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:layout_marginTop="16dp"
+        android:progressTint="@android:color/white"
+        android:progressBackgroundTint="@android:color/white"
+        android:progressBackgroundTintMode="multiply"
+        android:alpha="0.4"
+        android:max="100"
+        android:progress="100" />
+
+</LinearLayout>
