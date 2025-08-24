@@ -1,128 +1,87 @@
 package com.example.neurogate.ui.components
 
 import androidx.compose.runtime.*
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithCache
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.AnimationSpec
-import androidx.compose.animation.core.AnimationVector1D
-import android.util.Log
+import kotlinx.coroutines.delay
 
 /**
- * Performance utilities for Compose UI optimization
+ * Performance optimization utilities for Compose UI
  */
 
 /**
- * Memoized derived state for expensive computations
+ * Debounced state that delays updates to reduce recompositions
  */
 @Composable
-fun <T> rememberDerivedState(calculation: () -> T): T {
-    return remember { derivedStateOf(calculation) }.value
+fun <T> rememberDebouncedState(
+    initialValue: T,
+    delayMillis: Long = 300L
+): State<T> {
+    var value by remember { mutableStateOf(initialValue) }
+    var debouncedValue by remember { mutableStateOf(initialValue) }
+    
+    LaunchedEffect(value) {
+        delay(delayMillis)
+        debouncedValue = value
+    }
+    
+    return remember { derivedStateOf { debouncedValue } }
 }
 
 /**
- * Optimized scroll state with performance improvements
+ * Memoized expensive computation with automatic cleanup
  */
 @Composable
-fun rememberOptimizedScrollState(): androidx.compose.foundation.ScrollState {
-    return rememberScrollState()
-}
-
-/**
- * Performance-optimized modifier for expensive operations
- */
-fun Modifier.performanceOptimized(): Modifier = this
-
-/**
- * Cached background modifier for better performance
- */
-fun Modifier.cachedBackground(
-    color: Color,
-    alpha: Float = 1.0f
-): Modifier = this.drawWithCache {
-    onDrawBehind {
-        drawRect(color.copy(alpha = alpha))
+fun <T> rememberExpensiveComputation(
+    key: Any?,
+    computation: () -> T
+): T {
+    return remember(key) {
+        computation()
     }
 }
 
 /**
- * Optimized size change listener
+ * Optimized clickable modifier that prevents rapid clicks
  */
-fun Modifier.rememberSizeChangeListener(
-    onSizeChange: (width: Int, height: Int) -> Unit
+@Composable
+fun Modifier.optimizedClickable(
+    enabled: Boolean = true,
+    onClick: () -> Unit
 ): Modifier {
-    return this.onSizeChanged { size ->
-        onSizeChange(size.width, size.height)
-    }
+    var lastClickTime by remember { mutableLongStateOf(0L) }
+    
+    return this.clickable(
+        enabled = enabled,
+        onClick = {
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastClickTime > 300) { // 300ms debounce
+                lastClickTime = currentTime
+                onClick()
+            }
+        }
+    )
 }
 
 /**
- * Memoized color with alpha
+ * Lazy loading state for better performance
  */
 @Composable
-fun rememberColorWithAlpha(color: Color, alpha: Float): Color {
-    return remember(color, alpha) {
-        color.copy(alpha = alpha)
-    }
-}
-
-/**
- * Optimized spacing calculation
- */
-@Composable
-fun rememberSpacing(spacing: Dp): Int {
-    val density = LocalDensity.current
-    return remember(spacing) {
-        density.run { spacing.toPx().toInt() }
-    }
-}
-
-/**
- * Performance-optimized list item key generator
- */
-fun generateStableKey(id: String, index: Int): String {
-    return "item_${id}_$index"
-}
-
-/**
- * Memoized text style for better performance
- */
-@Composable
-fun rememberTextStyle(
-    fontSize: androidx.compose.ui.unit.TextUnit,
-    fontWeight: androidx.compose.ui.text.font.FontWeight? = null,
-    color: Color = Color.Unspecified
-): androidx.compose.ui.text.TextStyle {
-    return remember(fontSize, fontWeight, color) {
-        androidx.compose.ui.text.TextStyle(
-            fontSize = fontSize,
-            fontWeight = fontWeight,
-            color = color
+fun rememberLazyLoadingState(
+    isLoading: Boolean,
+    onLoadMore: () -> Unit
+): LazyLoadingState {
+    return remember {
+        LazyLoadingState(
+            isLoading = isLoading,
+            onLoadMore = onLoadMore
         )
     }
 }
 
-/**
- * Optimized clickable modifier with ripple effect
- */
-fun Modifier.optimizedClickable(
-    onClick: () -> Unit,
-    enabled: Boolean = true
-): Modifier = this.clickable(
-    enabled = enabled,
-    onClick = onClick
+data class LazyLoadingState(
+    val isLoading: Boolean,
+    val onLoadMore: () -> Unit
 )
 
 /**
@@ -130,122 +89,65 @@ fun Modifier.optimizedClickable(
  */
 @Composable
 fun rememberPerformanceMonitor(
-    key: String,
-    onPerformanceIssue: (String) -> Unit = {}
-) {
-    DisposableEffect(key) {
-        val startTime = System.currentTimeMillis()
-        onDispose {
-            val duration = System.currentTimeMillis() - startTime
-            if (duration > 16) { // 60fps threshold
-                onPerformanceIssue("Performance issue detected in $key: ${duration}ms")
-            }
-        }
-    }
-}
-
-/**
- * Optimized state management for lists
- */
-@Composable
-fun <T> rememberOptimizedListState(
-    items: List<T>,
-    keySelector: (T) -> String
-): androidx.compose.foundation.lazy.LazyListState {
-    return rememberLazyListState()
-}
-
-/**
- * Cached calculation for expensive operations
- */
-@Composable
-fun <T> rememberCachedCalculation(
-    key: Any,
-    calculation: () -> T
-): T {
-    return remember(key) { calculation() }
-}
-
-/**
- * Performance-optimized animation
- */
-@Composable
-fun rememberOptimizedAnimation(
-    targetValue: Float,
-    animationSpec: androidx.compose.animation.core.AnimationSpec<Float> = androidx.compose.animation.core.tween(300)
-): androidx.compose.animation.core.Animatable<Float, androidx.compose.animation.core.AnimationVector1D> {
-    val animatable = remember { androidx.compose.animation.core.Animatable(targetValue) }
-    
-    LaunchedEffect(targetValue) {
-        animatable.animateTo(targetValue, animationSpec)
-    }
-    
-    return animatable
-}
-
-/**
- * Optimized recomposition prevention
- */
-@Composable
-fun <T> rememberStable(
-    key: Any,
-    factory: () -> T
-): T {
-    return remember(key) { factory() }
-}
-
-/**
- * Performance-optimized modifier chain
- */
-fun Modifier.optimizedChain(
-    vararg modifiers: Modifier
-): Modifier {
-    var result: Modifier = Modifier
-    for (modifier in modifiers) {
-        result = result.then(modifier)
-    }
-    return this.then(result)
-}
-
-/**
- * Cached color calculation
- */
-@Composable
-fun rememberCachedColor(
-    color: Color,
-    alpha: Float = 1.0f
-): Color {
-    return remember(color, alpha) {
-        color.copy(alpha = alpha)
-    }
-}
-
-/**
- * Optimized layout performance
- */
-@Composable
-fun rememberLayoutOptimization(): Modifier {
-    return Modifier
-}
-
-/**
- * Performance monitoring for composables
- */
-@Composable
-fun PerformanceMonitor(
-    composableName: String,
-    content: @Composable () -> Unit
-) {
+    key: String
+): PerformanceMonitor {
     val startTime = remember { System.currentTimeMillis() }
     
-    DisposableEffect(Unit) {
+    DisposableEffect(key) {
         onDispose {
-            val duration = System.currentTimeMillis() - startTime
-            if (duration > 16) {
-                android.util.Log.w("Performance", "$composableName took ${duration}ms to compose")
-            }
+            val endTime = System.currentTimeMillis()
+            val duration = endTime - startTime
+            println("Performance: $key took ${duration}ms")
         }
     }
     
-    content()
+    return remember { PerformanceMonitor() }
+}
+
+class PerformanceMonitor {
+    fun logOperation(operation: String, block: () -> Unit) {
+        val startTime = System.currentTimeMillis()
+        block()
+        val endTime = System.currentTimeMillis()
+        println("Performance: $operation took ${endTime - startTime}ms")
+    }
+}
+
+/**
+ * Optimized list item that prevents unnecessary recompositions
+ */
+@Composable
+fun <T> OptimizedListItem(
+    item: T,
+    key: (T) -> Any,
+    content: @Composable (T) -> Unit
+) {
+    val memoizedItem = remember(key(item)) { item }
+    content(memoizedItem)
+}
+
+/**
+ * Conditional rendering with performance optimization
+ */
+@Composable
+fun ConditionalRender(
+    condition: Boolean,
+    content: @Composable () -> Unit
+) {
+    if (condition) {
+        content()
+    }
+}
+
+/**
+ * Optimized animation state that reduces unnecessary animations
+ */
+@Composable
+fun rememberOptimizedAnimationState(
+    targetValue: Float,
+    animationSpec: androidx.compose.animation.core.AnimationSpec<Float>? = null
+): androidx.compose.animation.core.Animatable<Float, androidx.compose.animation.core.AnimationVector1D> {
+    return remember {
+        androidx.compose.animation.core.Animatable(targetValue)
+    }
 }

@@ -1,61 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/notificationBackground"
-    android:layout_width="300dp"
-    android:layout_height="wrap_content"
-    android:minHeight="200dp"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="20dp"
-    android:layout_margin="16dp"
+    android:padding="24dp"
     android:background="@drawable/notification_background"
     android:elevation="20dp">
 
-    <!-- Header with Icon and Title -->
+    <!-- Header with Category Title -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
-        android:layout_marginBottom="8dp">
+        android:layout_marginBottom="16dp">
 
-        <!-- Category Icon -->
+        <!-- Category Title -->
         <TextView
-            android:id="@+id/categoryIcon"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
-            android:text="⚠️"
-            android:textSize="28sp"
-            android:gravity="center"
-            android:background="@drawable/icon_background"
-            android:layout_marginEnd="16dp" />
-
-        <!-- Title and Description -->
-        <LinearLayout
+            android:id="@+id/categoryTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/categoryTitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Content Detected"
-                android:textSize="20sp"
-                android:textStyle="bold"
-                android:textColor="@android:color/white"
-                android:layout_marginBottom="6dp" />
-
-            <TextView
-                android:id="@+id/categoryDescription"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Potential misuse detected"
-                android:textSize="16sp"
-                android:textColor="@android:color/white"
-                android:alpha="0.9" />
-
-        </LinearLayout>
+            android:text="Content Detected"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:textColor="@android:color/white"
+            android:gravity="center_vertical" />
 
         <!-- Close Button -->
         <ImageButton
@@ -69,21 +40,74 @@
 
     </LinearLayout>
 
-    <!-- Suggestion Text -->
+    <!-- Why we're deleting -->
     <TextView
-        android:id="@+id/suggestionText"
+        android:id="@+id/deleteReason"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Please review your content and consider alternatives"
-        android:textSize="15sp"
+        android:text="This content violates our safety guidelines"
+        android:textSize="16sp"
         android:textColor="@android:color/white"
-        android:alpha="0.8"
-        android:background="@drawable/suggestion_background"
-        android:padding="16dp"
-        android:layout_marginTop="12dp"
-        android:drawableStart="@drawable/ic_info"
-        android:drawablePadding="10dp"
+        android:alpha="0.9"
+        android:layout_marginBottom="12dp"
         android:gravity="center_vertical" />
+
+    <!-- What the user typed -->
+    <TextView
+        android:id="@+id/deletedContent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="You typed: Content preview will appear here"
+        android:textSize="16sp"
+        android:textColor="@android:color/white"
+        android:alpha="0.95"
+        android:padding="16dp"
+        android:layout_marginBottom="16dp"
+        android:gravity="start"
+        android:maxLines="4"
+        android:ellipsize="end"
+        android:layout_marginTop="8dp" />
+
+    <!-- Spacer to push buttons to bottom -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- Action Buttons Row -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center">
+
+        <!-- Undo Button -->
+        <Button
+            android:id="@+id/undoButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="UNDO"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="@android:color/white"
+            android:background="@drawable/undo_button_background"
+            android:layout_marginEnd="8dp" />
+
+        <!-- Dismiss Button -->
+        <Button
+            android:id="@+id/dismissButton"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:text="DISMISS"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="@android:color/white"
+            android:background="@drawable/dismiss_button_background"
+            android:layout_marginStart="8dp" />
+
+    </LinearLayout>
 
     <!-- Progress Bar for Auto-hide -->
     <ProgressBar

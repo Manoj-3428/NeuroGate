@@ -1,6 +1,9 @@
-package com.example.neurogate.ui.screens
 
-import androidx.compose.animation.core.*
+
+import androidx.compose.animation.core.EaseInCubic
+import androidx.compose.animation.core.EaseOutCubic
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -15,11 +18,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
-
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Today
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,20 +39,19 @@ import androidx.compose.ui.unit.dp
 import android.graphics.Paint
 import android.os.Build
 import androidx.annotation.RequiresApi
+import androidx.compose.animation.core.EaseOutBack
 import com.example.neurogate.data.DetectedActivity
-import com.example.neurogate.data.ActivityStorage
+import com.example.neurogate.ui.viewmodels.ActivityViewModel
 import java.util.*
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 // Data structure for weekly data
 data class WeeklyData(
@@ -62,10 +64,13 @@ data class WeeklyData(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    activityStorage: ActivityStorage,
+    viewModel: ActivityViewModel,
     onNavigateToActivityHistory: () -> Unit
 ) {
-    val activities by activityStorage.getAllActivities().collectAsState(initial = emptyList())
+    val activities by viewModel.activities.collectAsState()
+    
+    // Memoize expensive computations
+    val memoizedActivities = remember(activities) { activities }
     
     Column(
         modifier = Modifier
@@ -78,7 +83,7 @@ fun HomeScreen(
                 Text(
                     "NeuroGate", 
                     fontWeight = FontWeight.Bold,
-                    color = Color.Black
+                    color = Color.White
                 ) 
             },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -96,7 +101,7 @@ fun HomeScreen(
         ) {
             // Status Card
             item {
-                StatusCard(activityStorage = activityStorage)
+                StatusCard(viewModel = viewModel)
             }
             
             // Today's Activity Distribution
@@ -111,7 +116,7 @@ fun HomeScreen(
             
             // Pie Chart
             item {
-                PieChartCard(activities = activities)
+                PieChartCard(activities = memoizedActivities)
             }
             
             // View All Button
@@ -134,8 +139,20 @@ fun HomeScreen(
 }
 
 @Composable
-fun StatusCard(activityStorage: ActivityStorage) {
-    val activities by activityStorage.getAllActivities().collectAsState(initial = emptyList())
+fun StatusCard(viewModel: ActivityViewModel) {
+    val activities by viewModel.activities.collectAsState()
+    val activityCount by viewModel.activityCount.collectAsState()
+    
+    // Memoize expensive computations
+    val todayCount = remember(activities) {
+        val today = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        activities.count { it.timestamp.time >= today }
+    }
     
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -162,7 +179,7 @@ fun StatusCard(activityStorage: ActivityStorage) {
                         color = Color.Black
                     )
                     Text(
-                        text = "Active - Monitoring all apps",
+                        text = "Active - Monitoring all apps & websites",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color(0xFF2196F3) // Blue
                     )
@@ -183,20 +200,12 @@ fun StatusCard(activityStorage: ActivityStorage) {
             ) {
                 StatItem(
                     label = "Total Detections",
-                    value = activities.size.toString(),
+                    value = activityCount.toString(),
                     icon = Icons.Default.Warning
                 )
                 StatItem(
                     label = "Today",
-                    value = activities.count { 
-                        val today = Calendar.getInstance().apply {
-                            set(Calendar.HOUR_OF_DAY, 0)
-                            set(Calendar.MINUTE, 0)
-                            set(Calendar.SECOND, 0)
-                            set(Calendar.MILLISECOND, 0)
-                        }.timeInMillis
-                        it.timestamp >= today
-                    }.toString(),
+                    value = todayCount.toString(),
                     icon = Icons.Default.Today
                 )
             }
@@ -240,34 +249,36 @@ fun PieChartCard(activities: List<DetectedActivity>) {
     var showBarChart by remember { mutableStateOf(false) }
     var selectedDay by remember { mutableStateOf<Int?>(null) }
     
-    val todayActivities = activities.filter { 
+    // Memoize expensive computations
+    val todayActivities = remember(activities) {
         val today = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
-        it.timestamp >= today
+        activities.filter { it.timestamp.time >= today }
     }
     
-    // Generate real data for past 7 days from local storage
+    // Generate real data for past 7 days from local storage - memoized
     val weeklyData = remember(activities) {
-            (0..6).map { dayOffset ->
-                val date = LocalDate.now().minusDays(6L - dayOffset)
-                val startOfDay = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                val endOfDay = date.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                
-                val dayActivities = activities.filter { activity ->
-                    activity.timestamp >= startOfDay && activity.timestamp < endOfDay
-                }
-                
-                WeeklyData(
-                    date = date,
-                    flags = dayActivities.size,
-                    activities = dayActivities
-                )
+        val today = LocalDate.now()
+        (0..6).map { dayOffset ->
+            val date = today.minusDays(6L - dayOffset)
+            val startOfDay = date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            val endOfDay = date.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            
+            val dayActivities = activities.filter { activity ->
+                activity.timestamp.time >= startOfDay && activity.timestamp.time < endOfDay
             }
+            
+            WeeklyData(
+                date = date,
+                flags = dayActivities.size,
+                activities = dayActivities
+            )
         }
+    }
     
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -329,10 +340,13 @@ fun PieChartCard(activities: List<DetectedActivity>) {
                         weeklyData = weeklyData,
                         selectedDay = selectedDay,
                         onDaySelected = { dayIndex ->
-                            selectedDay = if (selectedDay == dayIndex) null else dayIndex
+                            selectedDay = dayIndex
                         },
                         onBackToPieChart = {
                             showBarChart = false
+                            selectedDay = null
+                        },
+                        onResetSelection = {
                             selectedDay = null
                         }
                     )
@@ -347,75 +361,37 @@ fun AnimatedPieChart(
     activities: List<DetectedActivity>,
     modifier: Modifier = Modifier
 ) {
-    // Trigger animations when the composable is first launched
-    LaunchedEffect(Unit) {
-        // This ensures animations start immediately
+    // Memoize category counts to avoid recalculation
+    val categoryCounts = remember(activities) {
+        activities.groupBy { it.category }
+            .mapValues { it.value.size }
+            .toList()
+            .sortedByDescending { it.second }
     }
-    val categoryCounts = activities.groupBy { it.category }
-        .mapValues { it.value.size }
-        .toList()
-        .sortedByDescending { it.second }
     
-    val total = categoryCounts.sumOf { it.second }
+    val total = remember(categoryCounts) { categoryCounts.sumOf { it.second } }
     
     if (total == 0) return
     
-    // Enhanced animations for better visual appeal
+    // Simplified animations for better performance
     val animatedProgress by animateFloatAsState(
         targetValue = 1f,
-        animationSpec = tween(1800, easing = EaseOutCubic),
+        animationSpec = tween(800, easing = EaseOutCubic),
         label = "pie_chart_animation"
     )
     
-    // Scale animation with bounce effect
-    val scale by animateFloatAsState(
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = EaseInOutSine),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "scale_animation"
-    )
-    
-    // Rotation animation for dynamic movement - continuous 360 degrees
-    val rotation by animateFloatAsState(
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(4000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rotation_animation"
-    )
-    
-    // Pulse animation for the chart
-    val pulse by animateFloatAsState(
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3500, easing = EaseInOutSine),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse_animation"
-    )
-    
-    // Entrance animation - starts from 0 and scales up with rotation
+    // Simple entrance animation only
     val entranceScale by animateFloatAsState(
         targetValue = 1f,
-        animationSpec = tween(1200, delayMillis = 200, easing = EaseOutCubic),
+        animationSpec = tween(600, easing = EaseOutCubic),
         label = "entrance_scale"
-    )
-    
-    val entranceRotation by animateFloatAsState(
-        targetValue = 360f,
-        animationSpec = tween(1200, delayMillis = 200, easing = EaseOutCubic),
-        label = "entrance_rotation"
     )
     
     Box(
         modifier = modifier
-            .scale(entranceScale * scale * (0.95f + pulse * 0.05f))
+            .scale(entranceScale)
             .graphicsLayer(
-                rotationZ = entranceRotation + rotation,
-                alpha = entranceScale * (0.9f + pulse * 0.1f)
+                alpha = entranceScale
             ),
         contentAlignment = Alignment.Center
     ) {
@@ -435,8 +411,8 @@ fun AnimatedPieChart(
                 var color = getCategoryColor(category)
                 val percentage = (count.toFloat() / total * 100).toInt()
                 
-                // Add gradient effect to colors with bounce
-                val enhancedColor = color.copy(alpha = (0.95f + pulse * 0.05f) * entranceScale)
+                // Add gradient effect to colors
+                val enhancedColor = color.copy(alpha = 0.95f * entranceScale)
                 
                 // Draw the pie segment with shadow effect
                 drawArc(
@@ -486,26 +462,27 @@ fun AnimatedPieChart(
 
 @Composable
 fun CategoryLegend(activities: List<DetectedActivity>) {
-    val categoryCounts = activities.groupBy { it.category }
-        .mapValues { it.value.size }
-        .toList()
-        .sortedByDescending { it.second }
+    // Memoize category counts to avoid recalculation
+    val categoryCounts = remember(activities) {
+        activities.groupBy { it.category }
+            .mapValues { it.value.size }
+            .toList()
+            .sortedByDescending { it.second }
+    }
     
-    val total = categoryCounts.sumOf { it.second }
+    val total = remember(categoryCounts) { categoryCounts.sumOf { it.second } }
     
-    // Animation for legend appearance
+    // Simplified animation for better performance
     val legendAnimation by animateFloatAsState(
         targetValue = 1f,
-        animationSpec = tween(1000, delayMillis = 300, easing = EaseOutCubic),
+        animationSpec = tween(400, easing = EaseOutCubic),
         label = "legend_animation"
     )
     
     Column(
         verticalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.graphicsLayer(
-            alpha = legendAnimation,
-            scaleX = 0.8f + legendAnimation * 0.2f,
-            scaleY = 0.8f + legendAnimation * 0.2f
+            alpha = legendAnimation
         )
     ) {
         Text(
@@ -539,29 +516,18 @@ fun LegendItem(
     color: Color,
     delay: Int = 0
 ) {
-    // Enhanced animation for legend items
+    // Simplified animation for better performance
     val animatedAlpha by animateFloatAsState(
         targetValue = 1f,
-        animationSpec = tween(600, delayMillis = delay, easing = EaseOutCubic),
+        animationSpec = tween(300, delayMillis = delay, easing = EaseOutCubic),
         label = "legend_animation"
-    )
-    
-    val pulseAnimation by animateFloatAsState(
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(3000, easing = EaseInOutSine),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse_legend"
     )
     
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .graphicsLayer(
-                alpha = animatedAlpha,
-                scaleX = 0.9f + animatedAlpha * 0.1f,
-                scaleY = 0.9f + animatedAlpha * 0.1f
+                alpha = animatedAlpha
             ),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -574,11 +540,7 @@ fun LegendItem(
                 modifier = Modifier
                     .size(20.dp)
                     .clip(CircleShape)
-                    .background(color.copy(alpha = 0.8f + pulseAnimation * 0.2f))
-                    .graphicsLayer(
-                        scaleX = 0.8f + pulseAnimation * 0.2f,
-                        scaleY = 0.8f + pulseAnimation * 0.2f
-                    )
+                    .background(color)
             )
             Text(
                 text = getCategoryDisplayName(category),
@@ -594,16 +556,12 @@ fun LegendItem(
                 text = "${percentage.toInt()}%",
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Bold,
-                color = color.copy(alpha = 0.8f + pulseAnimation * 0.2f),
-                modifier = Modifier.graphicsLayer(
-                    scaleX = 0.9f + pulseAnimation * 0.1f,
-                    scaleY = 0.9f + pulseAnimation * 0.1f
-                )
+                color = color
             )
             Text(
                 text = "($count)",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray.copy(alpha = 0.6f + pulseAnimation * 0.2f)
+                color = Color.Gray
             )
         }
     }
@@ -653,7 +611,7 @@ fun getCategoryColor(category: String): Color {
         "IMAGE_VIDEO_MISUSE" -> Color(0xFF4CAF50) // Green (like the sample)
         "EXPLOSIVES" -> Color(0xFFF44336) // Red (like the sample)
         "DRUGS" -> Color(0xFF9C27B0) // Purple
-        "DEEPFAKE" -> Color(0xFF2196F3) // Blue
+        "DEEPFAKE" -> Color(0xFF4CAF50) // Green
         "CELEBRITY_IMPERSONATION" -> Color(0xFFE91E63) // Pink
         "HARMFUL_CONTENT" -> Color(0xFFFF5722) // Deep Orange
         "COPYRIGHT_VIOLATION" -> Color(0xFF673AB7) // Deep Purple
@@ -679,11 +637,12 @@ fun WeeklyBarChartView(
     weeklyData: List<WeeklyData>,
     selectedDay: Int?,
     onDaySelected: (Int) -> Unit,
-    onBackToPieChart: () -> Unit
+    onBackToPieChart: () -> Unit,
+    onResetSelection: () -> Unit
 ) {
     Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
         // Header with back button
         Row(
@@ -715,8 +674,8 @@ fun WeeklyBarChartView(
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
         ) {
             Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -739,7 +698,7 @@ fun WeeklyBarChartView(
                 // Simple Bar Chart
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     // Bars
                     Row(
@@ -749,13 +708,15 @@ fun WeeklyBarChartView(
                     ) {
                         weeklyData.forEachIndexed { index, data ->
                         val isSelected = selectedDay == index
+                        val maxFlags = weeklyData.maxOfOrNull { it.flags } ?: 1
                         val barHeight = if (data.flags > 0) {
-                            120.dp
-                        } else 20.dp
+                            val heightRatio = data.flags.toFloat() / maxFlags.toFloat()
+                            (16.dp + (84.dp * heightRatio)).coerceAtLeast(20.dp)
+                        } else 16.dp
                         
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             // Count on top
@@ -768,8 +729,8 @@ fun WeeklyBarChartView(
                             
                             // Bar
                             val animatedScale by animateFloatAsState(
-                                targetValue = if (isSelected) 1.05f else 1f,
-                                animationSpec = tween(200, easing = EaseOutCubic),
+                                targetValue = if (isSelected) 1.02f else 1f,
+                                animationSpec = tween(150, easing = EaseOutCubic),
                                 label = "bar_scale_$index"
                             )
                             
@@ -783,11 +744,6 @@ fun WeeklyBarChartView(
                                     )
                                     .clickable { onDaySelected(index) }
                                     .scale(animatedScale)
-                                    .graphicsLayer(
-                                        shadowElevation = if (isSelected) 8f else 2f,
-                                        shape = RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp),
-                                        clip = true
-                                    )
                             )
                             
                             // Day name
@@ -809,15 +765,15 @@ fun WeeklyBarChartView(
             visible = selectedDay != null,
             enter = slideInVertically(
                 initialOffsetY = { it },
-                animationSpec = tween(300, easing = EaseOutCubic)
+                animationSpec = tween(200, easing = EaseOutCubic)
             ) + fadeIn(
-                animationSpec = tween(200)
+                animationSpec = tween(150)
             ),
             exit = slideOutVertically(
                 targetOffsetY = { it },
-                animationSpec = tween(250, easing = EaseInCubic)
+                animationSpec = tween(150, easing = EaseInCubic)
             ) + fadeOut(
-                animationSpec = tween(150)
+                animationSpec = tween(100)
             )
         ) {
             selectedDay?.let { dayIndex ->
@@ -829,21 +785,36 @@ fun WeeklyBarChartView(
                     elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
                     Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "Flagged Activities - ${selectedData.date.format(DateTimeFormatter.ofPattern("EEE, dd MMM"))}",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.Medium,
-                            color = Color.Black
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Flagged Activities - ${selectedData.date.format(DateTimeFormatter.ofPattern("EEE, dd MMM"))}",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                                color = Color.Black
+                            )
+                            IconButton(
+                                onClick = onResetSelection
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Close",
+                                    tint = Color.Gray
+                                )
+                            }
+                        }
                         
                         if (selectedData.activities.isEmpty()) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 32.dp),
+                                    .padding(vertical = 24.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
@@ -855,8 +826,8 @@ fun WeeklyBarChartView(
                             }
                         } else {
                             LazyColumn(
-                                modifier = Modifier.heightIn(max = 300.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                                modifier = Modifier.heightIn(max = 250.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 items(
                                     items = selectedData.activities,
@@ -881,54 +852,34 @@ fun FlaggedActivityItem(activity: DetectedActivity) {
         colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                // Category icon
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(
-                            color = getCategoryColor(activity.category),
-                            shape = CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = activity.category.first().toString(),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
-                
-                Column {
-                    Text(
-                        text = getCategoryDisplayName(activity.category),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = Color.Black
-                    )
-                    Text(
-                        text = activity.content,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
-                    )
-                }
+                Text(
+                    text = getCategoryDisplayName(activity.category),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = Color.Black
+                )
+                Text(
+                    text = "${(activity.confidence * 100).toInt()}%",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (activity.confidence > 0.8) Color.Red else Color(0xFF2196F3)
+                )
             }
-            
-            // Confidence indicator
             Text(
-                text = "${(activity.confidence * 100).toInt()}%",
+                text = activity.text.take(50) + if (activity.text.length > 50) "..." else "",
                 style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF2196F3)
+                color = Color.Gray
             )
         }
     }

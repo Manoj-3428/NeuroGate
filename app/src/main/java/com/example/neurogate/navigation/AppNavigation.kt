@@ -1,5 +1,6 @@
 package com.example.neurogate.navigation
 
+import HomeScreen
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -11,9 +12,9 @@ import com.example.neurogate.ui.screens.InputScreen
 
 import com.example.neurogate.ui.screens.PermissionRequestScreen
 import com.example.neurogate.ui.screens.ActivityHistoryScreen
-import com.example.neurogate.ui.screens.HomeScreen
 import com.example.neurogate.service.DetectionServiceManager
 import com.example.neurogate.service.PermissionManager
+import com.example.neurogate.ui.viewmodels.ActivityViewModel
 
 sealed class Screen(val route: String) {
     object Permissions : Screen("permissions")
@@ -28,6 +29,7 @@ sealed class Screen(val route: String) {
 fun AppNavigation(
     navController: NavHostController = rememberNavController(),
     viewModel: AIDetectionViewModel,
+    activityViewModel: ActivityViewModel,
     detectionServiceManager: DetectionServiceManager? = null,
     permissionManager: PermissionManager? = null
 ) {
@@ -53,7 +55,7 @@ fun AppNavigation(
         
         composable(Screen.Home.route) {
             HomeScreen(
-                activityStorage = com.example.neurogate.data.ActivityStorage.getInstance(navController.context),
+                viewModel = activityViewModel,
                 onNavigateToActivityHistory = {
                     navController.navigate(Screen.ActivityHistory.route)
                 }
@@ -82,7 +84,7 @@ fun AppNavigation(
         
         composable(Screen.ActivityHistory.route) {
             ActivityHistoryScreen(
-                activityStorage = com.example.neurogate.data.ActivityStorage.getInstance(navController.context),
+                viewModel = activityViewModel,
                 onBackClick = {
                     navController.popBackStack()
                 }

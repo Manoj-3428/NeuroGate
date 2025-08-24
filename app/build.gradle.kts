@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     id("org.jetbrains.kotlin.plugin.serialization") version "1.9.20"
+    id("kotlin-kapt")
 }
 
 android {
@@ -97,6 +98,11 @@ dependencies {
     
     // Icons
     implementation("androidx.compose.material:material-icons-extended:1.6.1")
+    
+    // Room Database
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    kapt("androidx.room:room-compiler:2.6.1")
     
     // DataStore for preferences
     implementation("androidx.datastore:datastore-preferences:1.0.0")

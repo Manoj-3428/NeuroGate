@@ -15,7 +15,8 @@ import com.example.neurogate.ai.LanguageModelService
 import com.example.neurogate.data.PromptAnalysisResponse
 import com.example.neurogate.data.MisuseCategory
 import com.example.neurogate.data.DetectedActivity
-import com.example.neurogate.data.ActivityStorage
+import com.example.neurogate.data.ActivityRepository
+import com.example.neurogate.data.AppDatabase
 import kotlinx.coroutines.*
 import android.content.Context
 import android.graphics.Color
@@ -36,7 +37,7 @@ class RealTimeDetectionService : AccessibilityService() {
          private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
          private lateinit var languageModelService: LanguageModelService
     private var wakeLock: android.os.PowerManager.WakeLock? = null
-    private lateinit var activityStorage: ActivityStorage
+    private lateinit var activityRepository: ActivityRepository
     
     // UI Components for sliding notification
     private var windowManager: WindowManager? = null
@@ -49,21 +50,44 @@ class RealTimeDetectionService : AccessibilityService() {
     // Detection settings
     private var isDetectionEnabled = true
     private var lastDetectedText = ""
-    private var detectionCooldown = 1000L // 1 second cooldown
     private var currentInputText = ""
     private var lastInputTime = 0L
     private var isProcessingDetection = false
     
+    // Undo functionality
+    private data class ClearedTextData(
+        val originalText: String,
+        val sourceNode: AccessibilityNodeInfo?,
+        val packageName: String,
+        val timestamp: Long
+    )
+    
+    private var lastClearedTextData: ClearedTextData? = null
+    private var lastPendingActivityId: Long = -1L // Track the last pending activity ID
+    // Removed blockedFields - now using fieldUndoFlags only
+    // Field-based flag system for undo protection
+    private val fieldUndoFlags = mutableMapOf<String, Boolean>() // Track undo flags for each field
+    
     companion object {
         private const val TAG = "RealTimeDetection"
         
-        // Detection categories with colors
+        // Detection categories with colors - Consistent with pie chart
         val categoryColors = mapOf(
-            MisuseCategory.PRIVACY_VIOLATION to "#FF6B6B".toColorInt(), // Red
-            MisuseCategory.HARMFUL_CONTENT to "#FF8E53".toColorInt(), // Orange
-            MisuseCategory.DEEPFAKE to "#4ECDC4".toColorInt(), // Teal
-            MisuseCategory.CELEBRITY_IMPERSONATION to "#45B7D1".toColorInt(), // Blue
-            MisuseCategory.NONE to "#96CEB4".toColorInt() // Green
+            "PERSONAL_DATA" to "#4FC3F7".toColorInt(), // Vibrant Blue
+            "HACKING" to "#FF9800".toColorInt(), // Orange
+            "IMAGE_VIDEO_MISUSE" to "#4CAF50".toColorInt(), // Green
+            "EXPLOSIVES" to "#F44336".toColorInt(), // Red
+            "DRUGS" to "#9C27B0".toColorInt(), // Purple
+            "DEEPFAKE" to "#4CAF50".toColorInt(), // Green
+            "CELEBRITY_IMPERSONATION" to "#E91E63".toColorInt(), // Pink
+            "HARMFUL_CONTENT" to "#FF5722".toColorInt(), // Deep Orange
+            "COPYRIGHT_VIOLATION" to "#673AB7".toColorInt(), // Deep Purple
+            "PRIVACY_VIOLATION" to "#00BCD4".toColorInt(), // Cyan
+            MisuseCategory.PRIVACY_VIOLATION to "#00BCD4".toColorInt(), // Cyan
+            MisuseCategory.HARMFUL_CONTENT to "#FF5722".toColorInt(), // Deep Orange
+            MisuseCategory.DEEPFAKE to "#4CAF50".toColorInt(), // Green
+            MisuseCategory.CELEBRITY_IMPERSONATION to "#E91E63".toColorInt(), // Pink
+            MisuseCategory.NONE to "#607D8B".toColorInt() // Blue Grey
         )
         
         val categoryIcons = mapOf(
@@ -81,8 +105,9 @@ class RealTimeDetectionService : AccessibilityService() {
          
          languageModelService = LanguageModelService(this)
         
-        // Initialize activity storage
-        activityStorage = ActivityStorage.getInstance(this)
+        // Initialize activity repository
+        val database = AppDatabase.getDatabase(this)
+        activityRepository = ActivityRepository(database.detectedActivityDao())
          
          // Initialize window manager for sliding notifications
          windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -121,6 +146,9 @@ class RealTimeDetectionService : AccessibilityService() {
                          Log.d(TAG, "Resetting detection state due to inactivity")
                          resetDetectionState()
                      }
+                     
+                     // Check and reset undo flags for empty fields
+                     checkAndResetUndoFlags()
                      
                      delay(15000) // Check every 15 seconds
                  } catch (e: Exception) {
@@ -241,7 +269,6 @@ class RealTimeDetectionService : AccessibilityService() {
         if (!isDetectionEnabled) return
         
         val packageName = event.packageName?.toString() ?: "unknown"
-        val currentTime = System.currentTimeMillis()
         
         // Log all events for debugging
         Log.d(TAG, "Event from $packageName: ${event.eventType} - Text: '${event.text?.joinToString("")?.take(20)}...'")
@@ -287,7 +314,11 @@ class RealTimeDetectionService : AccessibilityService() {
          private fun handleTextChange(event: AccessibilityEvent) {
          val text = event.text?.joinToString("") ?: ""
          val packageName = event.packageName?.toString() ?: ""
-         val currentTime = System.currentTimeMillis()
+         
+         // Check and reset flags for empty fields immediately
+         if (text.isBlank()) {
+             checkAndResetUndoFlagsImmediately(event.source, packageName)
+         }
          
          // Skip if same text or empty
          if (text.isBlank() || text == lastDetectedText) return
@@ -302,7 +333,7 @@ class RealTimeDetectionService : AccessibilityService() {
          
          // Update current input text
          currentInputText = text
-         lastInputTime = currentTime
+         lastInputTime = System.currentTimeMillis()
          
          Log.d(TAG, "Text change in $packageName: '${text.take(30)}...' (length: ${text.length})")
          
@@ -315,12 +346,18 @@ class RealTimeDetectionService : AccessibilityService() {
              lastDetectedText = text
              isProcessingDetection = true
              
-             serviceScope.launch {
-                 try {
-                     analyzeTextInRealTime(text, event.source, packageName)
-                 } finally {
-                     isProcessingDetection = false
+             // Check if the field is blocked before analyzing
+             if (!isFieldBlocked(event.source, packageName)) {
+                 serviceScope.launch {
+                     try {
+                         analyzeTextInRealTime(text, event.source, packageName)
+                     } finally {
+                         isProcessingDetection = false
+                     }
                  }
+             } else {
+                 Log.d(TAG, "Field blocked from analysis in $packageName: '${text.take(30)}...'")
+                 isProcessingDetection = false
              }
          }
      }
@@ -348,9 +385,14 @@ class RealTimeDetectionService : AccessibilityService() {
         val packageName = event.packageName?.toString() ?: ""
         
         if (selectedText.isNotBlank() && selectedText != lastDetectedText) {
-            lastDetectedText = selectedText
-            serviceScope.launch {
-                analyzeTextInRealTime(selectedText, nodeInfo, packageName)
+            // Check if the field is blocked before analyzing
+            if (!isFieldBlocked(nodeInfo, packageName)) {
+                lastDetectedText = selectedText
+                serviceScope.launch {
+                    analyzeTextInRealTime(selectedText, nodeInfo, packageName)
+                }
+            } else {
+                Log.d(TAG, "Field blocked from selection analysis in $packageName: '${selectedText.take(30)}...'")
             }
         }
     }
@@ -363,8 +405,13 @@ class RealTimeDetectionService : AccessibilityService() {
             val packageName = event.packageName?.toString() ?: ""
             
             if (text.isNotBlank() && text.length > 5) {
-                serviceScope.launch {
-                    analyzeTextInRealTime(text, nodeInfo, packageName)
+                // Check if the field is blocked before analyzing
+                if (!isFieldBlocked(nodeInfo, packageName)) {
+                    serviceScope.launch {
+                        analyzeTextInRealTime(text, nodeInfo, packageName)
+                    }
+                } else {
+                    Log.d(TAG, "Field blocked from focus analysis in $packageName: '${text.take(30)}...'")
                 }
             }
         }
@@ -378,8 +425,13 @@ class RealTimeDetectionService : AccessibilityService() {
             val packageName = event.packageName?.toString() ?: ""
             
             if (text.isNotBlank() && text.length > 5) {
-                serviceScope.launch {
-                    analyzeTextInRealTime(text, nodeInfo, packageName)
+                // Check if the field is blocked before analyzing
+                if (!isFieldBlocked(nodeInfo, packageName)) {
+                    serviceScope.launch {
+                        analyzeTextInRealTime(text, nodeInfo, packageName)
+                    }
+                } else {
+                    Log.d(TAG, "Field blocked from click analysis in $packageName: '${text.take(30)}...'")
                 }
             }
         }
@@ -401,8 +453,13 @@ class RealTimeDetectionService : AccessibilityService() {
              val text = event.text?.joinToString("") ?: ""
              if (text.isNotBlank() && text.length >= 1 && text != lastDetectedText && 
                  !text.contains("http") && !text.contains("www")) {
-                 serviceScope.launch {
-                     analyzeTextInRealTime(text, event.source, packageName)
+                 // Check if the field is blocked before analyzing
+                 if (!isFieldBlocked(event.source, packageName)) {
+                     serviceScope.launch {
+                         analyzeTextInRealTime(text, event.source, packageName)
+                     }
+                 } else {
+                     Log.d(TAG, "Field blocked from web content analysis in $packageName: '${text.take(30)}...'")
                  }
              }
              
@@ -439,8 +496,13 @@ class RealTimeDetectionService : AccessibilityService() {
         // Check for text in scrollable content
         val text = event.text?.joinToString("") ?: ""
         if (text.isNotBlank() && text.length > 2 && text != lastDetectedText) {
-            serviceScope.launch {
-                analyzeTextInRealTime(text, event.source, packageName)
+            // Check if the field is blocked before analyzing
+            if (!isFieldBlocked(event.source, packageName)) {
+                serviceScope.launch {
+                    analyzeTextInRealTime(text, event.source, packageName)
+                }
+            } else {
+                Log.d(TAG, "Field blocked from scroll analysis in $packageName: '${text.take(30)}...'")
             }
         }
     }
@@ -479,6 +541,15 @@ class RealTimeDetectionService : AccessibilityService() {
                  // For web browsers, check both focused and non-focused editable fields
                  if (text.isNotBlank() && text.length >= minLength && text != lastDetectedText && 
                      (isWeb || isFocused)) {
+                     
+                     // Check if this field is blocked from detection
+                     if (isFieldBlocked(rootNode, packageName)) {
+                         Log.d(TAG, "Field blocked from detection in $packageName: '${text.take(30)}...'")
+                         return
+                     }
+                     
+
+                     
                      Log.d(TAG, "Found editable field in $packageName: '${text.take(30)}...' (focused: $isFocused, web: $isWeb)")
                      serviceScope.launch {
                          analyzeTextInRealTime(text, rootNode, packageName)
@@ -507,6 +578,15 @@ class RealTimeDetectionService : AccessibilityService() {
                                  rootNode.contentDescription?.toString()?.contains("search") == true
                  
                  if (isWebInput && text.isNotBlank() && text.length >= minLength && text != lastDetectedText) {
+                     
+                     // Check if this field is blocked from detection
+                     if (isFieldBlocked(rootNode, packageName)) {
+                         Log.d(TAG, "Web field blocked from detection in $packageName: '${text.take(30)}...'")
+                         return
+                     }
+                     
+
+                     
                      Log.d(TAG, "Found web input field in $packageName: '${text.take(30)}...' (class: $className)")
                      serviceScope.launch {
                          analyzeTextInRealTime(text, rootNode, packageName)
@@ -527,16 +607,44 @@ class RealTimeDetectionService : AccessibilityService() {
         try {
             Log.d(TAG, "Analyzing text in $packageName: '${text.take(50)}...'")
             
+            // Check for manual reset command
+            if (text.trim() == "RESET_FLAG" || text.trim() == "reset_flag") {
+                val fieldId = generateFieldId(source, packageName)
+                if (fieldUndoFlags[fieldId] == true) {
+                    fieldUndoFlags[fieldId] = false
+                    Log.d(TAG, "🔄 MANUAL FLAG RESET: $fieldId = false (user requested reset)")
+                    showManualResetFeedback()
+                    return
+                }
+            }
+            
+            // Check for DeepSeek specific reset command
+            if (text.trim() == "DEEPSEEK_RESET" && packageName == "com.deepseek.chat") {
+                // Reset all DeepSeek flags
+                val flagsToReset = fieldUndoFlags.filter { it.key.contains("com.deepseek.chat") }
+                flagsToReset.forEach { (fieldId, _) ->
+                    fieldUndoFlags[fieldId] = false
+                    Log.d(TAG, "🔄 DEEPSEEK MANUAL RESET: $fieldId = false")
+                }
+                showManualResetFeedback()
+                return
+            }
+            
             val analysis = languageModelService.analyzePromptWithLLM(text)
             
             if (analysis.isMisuse && analysis.confidence > 0.75) {
                 Log.w(TAG, "🚨 DETECTED MISUSE in $packageName: ${analysis.category} (confidence: ${analysis.confidence})")
                 
-                // Store detected activity in background
-                storeDetectedActivity(text, analysis.category.name, packageName, analysis.confidence)
+                // Capture the text before clearing
+                Log.d(TAG, "📝 Capturing text - currentInputText length: ${currentInputText.length}, content: '${currentInputText.take(50)}...'")
+                val detectedText = currentInputText
                 
-                // Show sliding notification
-                showSlidingNotification(analysis)
+                // Store detected activity in background with captured text
+                Log.d(TAG, "💾 Storing to DB - Length: ${detectedText.length}, Content: '${detectedText.take(50)}...'")
+                storeDetectedActivity(detectedText, analysis.category.name, packageName, analysis.confidence)
+                
+                // Show sliding notification with captured text
+                showSlidingNotification(analysis, detectedText)
                 
                 // Clear input field if possible
                 clearInputField(source)
@@ -558,7 +666,7 @@ class RealTimeDetectionService : AccessibilityService() {
         }
     }
     
-         private fun showSlidingNotification(analysis: PromptAnalysisResponse) {
+         private fun showSlidingNotification(analysis: PromptAnalysisResponse, detectedText: String) {
          val currentTime = System.currentTimeMillis()
          
          // Prevent multiple notifications and respect cooldown
@@ -584,7 +692,7 @@ class RealTimeDetectionService : AccessibilityService() {
                      return@launch
                  }
                  
-                 createNotificationView(analysis)
+                 createNotificationView(analysis, detectedText)
                  animateNotificationIn()
              } catch (e: Exception) {
                  Log.e(TAG, "Error showing notification", e)
@@ -595,25 +703,27 @@ class RealTimeDetectionService : AccessibilityService() {
          }
      }
     
-         private fun createNotificationView(analysis: PromptAnalysisResponse) {
+         private fun createNotificationView(analysis: PromptAnalysisResponse, detectedText: String) {
          val inflater = LayoutInflater.from(this)
          notificationView = inflater.inflate(R.layout.sliding_notification, null)
          
          // Set up notification content
-         val categoryIcon = notificationView?.findViewById<TextView>(R.id.categoryIcon)
          val categoryTitle = notificationView?.findViewById<TextView>(R.id.categoryTitle)
-         val categoryDescription = notificationView?.findViewById<TextView>(R.id.categoryDescription)
-         val suggestionText = notificationView?.findViewById<TextView>(R.id.suggestionText)
+         val deleteReason = notificationView?.findViewById<TextView>(R.id.deleteReason)
+         val deletedContent = notificationView?.findViewById<TextView>(R.id.deletedContent)
          
          // Set category-specific content
          val category = analysis.category
-         val color = categoryColors[category] ?: Color.GRAY
-         val icon = categoryIcons[category] ?: "⚠️"
+         val categoryString = category.name
+         val color = categoryColors[categoryString] ?: categoryColors[category] ?: Color.GRAY
          
-         categoryIcon?.text = icon
          categoryTitle?.text = getCategoryTitle(category)
-         categoryDescription?.text = analysis.reason
-         suggestionText?.text = analysis.suggestions.firstOrNull() ?: "Please review your content"
+         deleteReason?.text = analysis.reason
+         
+         // Log the detected text for debugging
+         Log.d(TAG, "🔍 Notification text - Length: ${detectedText.length}, Content: '${detectedText.take(50)}...'")
+         
+         deletedContent?.text = "User typed: \"${detectedText.take(150)}${if (detectedText.length > 150) "..." else ""}\""
          
          // Set up close button functionality
          val closeButton = notificationView?.findViewById<ImageButton>(R.id.closeButton)
@@ -623,11 +733,33 @@ class RealTimeDetectionService : AccessibilityService() {
              animateNotificationOut()
          }
          
+         // Set up undo button functionality
+         val undoButton = notificationView?.findViewById<Button>(R.id.undoButton)
+         undoButton?.setOnClickListener {
+             Log.d(TAG, "Undo button clicked")
+             progressAnimator?.cancel()
+             undoLastClear()
+             animateNotificationOut()
+         }
+         
+         // Set up dismiss button functionality
+         val dismissButton = notificationView?.findViewById<Button>(R.id.dismissButton)
+         dismissButton?.setOnClickListener {
+             Log.d(TAG, "Dismiss button clicked")
+             progressAnimator?.cancel()
+             animateNotificationOut()
+         }
+         
          // Set background color with modern card design
          val background = notificationView?.findViewById<View>(R.id.notificationBackground)
          background?.background = createModernCardBackground(color)
          
-         // Set up window parameters for center positioning
+         // Get screen dimensions
+         val displayMetrics = resources.displayMetrics
+         val screenWidth = displayMetrics.widthPixels
+         val screenHeight = displayMetrics.heightPixels
+         
+         // Set up window parameters for center positioning with 70% width and 50% height
          val params = WindowManager.LayoutParams().apply {
              type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                  WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -637,8 +769,8 @@ class RealTimeDetectionService : AccessibilityService() {
              flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                      WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
              format = PixelFormat.TRANSLUCENT
-             width = WindowManager.LayoutParams.WRAP_CONTENT
-             height = WindowManager.LayoutParams.WRAP_CONTENT
+             width = (screenWidth * 0.7).toInt()  // 70% of screen width
+             height = (screenHeight * 0.5).toInt() // 50% of screen height
              gravity = Gravity.CENTER
              x = 0
              y = 0
@@ -649,13 +781,13 @@ class RealTimeDetectionService : AccessibilityService() {
          isNotificationShowing = true
          lastNotificationTime = System.currentTimeMillis()
          
-         // Auto-hide after exactly 3 seconds with progress animation
+         // Auto-hide after exactly 10 seconds with progress animation
          serviceScope.launch {
              val progressBar = notificationView?.findViewById<ProgressBar>(R.id.autoHideProgress)
              
-             // Animate progress bar from 100 to 0 over 3 seconds
+             // Animate progress bar from 100 to 0 over 10 seconds
              progressAnimator = ValueAnimator.ofInt(100, 0)
-             progressAnimator?.duration = 3000 // Exactly 3 seconds
+             progressAnimator?.duration = 10000 // Exactly 10 seconds
              progressAnimator?.interpolator = AccelerateDecelerateInterpolator()
              
              progressAnimator?.addUpdateListener { animation ->
@@ -786,6 +918,16 @@ class RealTimeDetectionService : AccessibilityService() {
             // Always reset state
             notificationView = null
             isNotificationShowing = false
+            
+            // Mark the pending activity as notification closed (final storage)
+            if (lastPendingActivityId > 0) {
+                serviceScope.launch(Dispatchers.IO) {
+                    activityRepository.markAsNotificationClosed(lastPendingActivityId)
+                    Log.d(TAG, "✅ Marked activity $lastPendingActivityId as notification closed (final storage)")
+                    lastPendingActivityId = -1L // Reset the ID
+                }
+            }
+            
             Log.d(TAG, "Notification state reset")
         }
     }
@@ -826,6 +968,21 @@ class RealTimeDetectionService : AccessibilityService() {
                 
                 val currentPackage = rootInActiveWindow?.packageName?.toString() ?: ""
                 val isWeb = isWebBrowser(currentPackage)
+                
+                // Store the original text for undo functionality
+                val originalText = node.text?.toString() ?: ""
+                val fieldId = generateFieldId(node, currentPackage)
+                
+                // Store cleared text data for undo
+                lastClearedTextData = ClearedTextData(
+                    originalText = originalText,
+                    sourceNode = node,
+                    packageName = currentPackage,
+                    timestamp = System.currentTimeMillis()
+                )
+                
+                // Note: Field blocking is now handled by fieldUndoFlags system
+                Log.d(TAG, "Field cleared: $fieldId - undo functionality available")
                 
                 // Method 1: Direct clearing
                 if (node.isEditable) {
@@ -1038,31 +1195,21 @@ class RealTimeDetectionService : AccessibilityService() {
     private fun storeDetectedActivity(content: String, category: String, packageName: String, confidence: Double) {
         serviceScope.launch(Dispatchers.IO) {
             try {
-                // Get app name from package manager
-                val appName = try {
-                    val packageManager = packageManager
-                    val applicationInfo = packageManager.getApplicationInfo(packageName, 0)
-                    packageManager.getApplicationLabel(applicationInfo).toString()
-                } catch (e: Exception) {
-                    // Fallback to package name if app name not found
-                    packageName
-                }
-                
-                // Create detected activity object
-                val detectedActivity = DetectedActivity(
-                    content = content,
+                // Store as pending activity (notification not closed yet)
+                val activityId = activityRepository.insertPendingActivity(
+                    text = content,
                     category = category,
-                    appPackage = packageName,
-                    appName = appName,
-                    timestamp = System.currentTimeMillis(),
-                    confidence = confidence,
-                    isCleared = false // Will be updated if clearing is successful
+                    packageName = packageName,
+                    confidence = confidence
                 )
                 
-                // Store in activity storage
-                activityStorage.insertActivity(detectedActivity)
-                
-                Log.d(TAG, "📝 Stored detected activity: $category in $appName - '${content.take(30)}...'")
+                if (activityId > 0) {
+                    Log.d(TAG, "📝 Stored pending activity: $category in $packageName - '${content.take(30)}...' (ID: $activityId)")
+                    // Store the activity ID for later use when notification closes
+                    lastPendingActivityId = activityId
+                } else {
+                    Log.e(TAG, "Failed to store pending activity")
+                }
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Error storing detected activity", e)
@@ -1078,6 +1225,512 @@ class RealTimeDetectionService : AccessibilityService() {
                 Log.d(TAG, "Attempted to clear content: '${content.take(30)}...' in $packageName")
             } catch (e: Exception) {
                 Log.e(TAG, "Error updating activity status", e)
+            }
+        }
+    }
+    
+    // Undo functionality
+    private fun undoLastClear() {
+        try {
+            val clearedData = lastClearedTextData
+            if (clearedData != null) {
+                Log.d(TAG, "Undoing last clear operation")
+                
+                // Try to restore the original text
+                val success = restoreTextToField(clearedData.originalText, clearedData.sourceNode)
+                
+                if (success) {
+                    Log.d(TAG, "Successfully restored text: '${clearedData.originalText.take(30)}...'")
+                    
+                    // Set undo flag to true to prevent re-detection of this field
+                    val fieldId = generateFieldId(clearedData.sourceNode, clearedData.packageName)
+                    fieldUndoFlags[fieldId] = true
+                    Log.d(TAG, "🚫 UNDO FLAG SET: $fieldId = true (field protected until empty)")
+                    
+                    // Mark the pending activity as undo used
+                    if (lastPendingActivityId > 0) {
+                        serviceScope.launch(Dispatchers.IO) {
+                            activityRepository.markAsUndoUsed(lastPendingActivityId)
+                            Log.d(TAG, "🔄 Marked activity $lastPendingActivityId as undo used")
+                        }
+                    }
+                    
+                    // Show success feedback
+                    showUndoSuccessFeedback()
+                } else {
+                    Log.w(TAG, "Failed to restore text, field might be unavailable")
+                    showUndoFailureFeedback()
+                }
+                
+                // Clear the stored data
+                lastClearedTextData = null
+            } else {
+                Log.w(TAG, "No cleared text data available for undo")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during undo operation", e)
+        }
+    }
+    
+    private fun restoreTextToField(originalText: String, sourceNode: AccessibilityNodeInfo?): Boolean {
+        try {
+            sourceNode?.let { node ->
+                // Method 1: Direct text restoration
+                val arguments = Bundle()
+                arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, originalText)
+                var success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                
+                if (success) {
+                    Log.d(TAG, "Direct text restoration successful")
+                    return true
+                }
+                
+                // Method 2: Try parent nodes
+                var parent = node.parent
+                var depth = 0
+                while (parent != null && depth < 5) {
+                    if (parent.isEditable) {
+                        val parentArgs = Bundle()
+                        parentArgs.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, originalText)
+                        success = parent.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, parentArgs)
+                        
+                        if (success) {
+                            Log.d(TAG, "Parent text restoration successful (depth $depth)")
+                            return true
+                        }
+                    }
+                    parent = parent.parent
+                    depth++
+                }
+                
+                // Method 3: Enhanced window search for ChatGPT and other apps
+                rootInActiveWindow?.let { root ->
+                    success = findAndRestoreTextInWindowEnhanced(root, originalText, sourceNode)
+                    if (success) {
+                        Log.d(TAG, "Enhanced window text restoration successful")
+                        return true
+                    }
+                }
+                
+                // Method 4: Try to find the field by package name and common patterns
+                val packageName = sourceNode.packageName?.toString() ?: ""
+                success = findFieldByPackagePattern(packageName, originalText)
+                if (success) {
+                    Log.d(TAG, "Package pattern text restoration successful")
+                    return true
+                }
+            }
+            
+            return false
+        } catch (e: Exception) {
+            Log.e(TAG, "Error restoring text to field", e)
+            return false
+        }
+    }
+    
+    private fun findAndRestoreTextInWindowEnhanced(rootNode: AccessibilityNodeInfo?, originalText: String, originalNode: AccessibilityNodeInfo?): Boolean {
+        if (rootNode == null) return false
+        
+        try {
+            // Method 1: Find empty editable fields
+            if (rootNode.isEditable && rootNode.text.isNullOrBlank()) {
+                val arguments = Bundle()
+                arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, originalText)
+                val success = rootNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                
+                if (success) {
+                    Log.d(TAG, "Found empty editable field and restored text")
+                    return true
+                }
+            }
+            
+            // Method 2: Find fields with similar properties to original
+            if (originalNode != null) {
+                if (rootNode.isEditable && 
+                    rootNode.className == originalNode.className &&
+                    rootNode.viewIdResourceName == originalNode.viewIdResourceName) {
+                    
+                    val arguments = Bundle()
+                    arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, originalText)
+                    val success = rootNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                    
+                    if (success) {
+                        Log.d(TAG, "Found matching field and restored text")
+                        return true
+                    }
+                }
+            }
+            
+            // Method 3: Find focused editable fields
+            if (rootNode.isEditable && rootNode.isFocused) {
+                val arguments = Bundle()
+                arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, originalText)
+                val success = rootNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                
+                if (success) {
+                    Log.d(TAG, "Found focused editable field and restored text")
+                    return true
+                }
+            }
+            
+            // Recursively check child nodes
+            for (i in 0 until rootNode.childCount) {
+                val success = findAndRestoreTextInWindowEnhanced(rootNode.getChild(i), originalText, originalNode)
+                if (success) return true
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding and restoring text in window", e)
+        }
+        
+        return false
+    }
+    
+    private fun findFieldByPackagePattern(packageName: String, originalText: String): Boolean {
+        try {
+            rootInActiveWindow?.let { root ->
+                return findFieldByPackagePatternRecursive(root, packageName, originalText)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error finding field by package pattern", e)
+        }
+        return false
+    }
+    
+    private fun findFieldByPackagePatternRecursive(node: AccessibilityNodeInfo?, packageName: String, originalText: String): Boolean {
+        if (node == null) return false
+        
+        try {
+            // Common patterns for different apps
+            when (packageName) {
+                "com.openai.chatgpt" -> {
+                    // ChatGPT specific patterns
+                    if (node.isEditable && (node.viewIdResourceName?.contains("input") == true || 
+                                          node.viewIdResourceName?.contains("edit") == true ||
+                                          node.className?.contains("EditText") == true)) {
+                        val arguments = Bundle()
+                        arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, originalText)
+                        val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                        
+                        if (success) {
+                            Log.d(TAG, "Found ChatGPT input field and restored text")
+                            return true
+                        }
+                    }
+                }
+                "com.whatsapp" -> {
+                    // WhatsApp specific patterns
+                    if (node.isEditable && (node.viewIdResourceName?.contains("entry") == true ||
+                                          node.className?.contains("EditText") == true)) {
+                        val arguments = Bundle()
+                        arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, originalText)
+                        val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                        
+                        if (success) {
+                            Log.d(TAG, "Found WhatsApp input field and restored text")
+                            return true
+                        }
+                    }
+                }
+                "com.deepseek.chat" -> {
+                    // DeepSeek specific patterns
+                    if (node.isEditable && (node.viewIdResourceName?.contains("input") == true || 
+                                          node.viewIdResourceName?.contains("edit") == true ||
+                                          node.className?.contains("EditText") == true ||
+                                          node.className?.contains("TextView") == true)) {
+                        val arguments = Bundle()
+                        arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, originalText)
+                        val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                        
+                        if (success) {
+                            Log.d(TAG, "Found DeepSeek input field and restored text")
+                            return true
+                        }
+                    }
+                }
+                else -> {
+                    // Generic pattern for other apps
+                    if (node.isEditable && node.isFocused) {
+                        val arguments = Bundle()
+                        arguments.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, originalText)
+                        val success = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+                        
+                        if (success) {
+                            Log.d(TAG, "Found focused editable field and restored text")
+                            return true
+                        }
+                    }
+                }
+            }
+            
+            // Recursively check child nodes
+            for (i in 0 until node.childCount) {
+                val success = findFieldByPackagePatternRecursive(node.getChild(i), packageName, originalText)
+                if (success) return true
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in package pattern search", e)
+        }
+        
+        return false
+    }
+    
+    private fun generateFieldId(node: AccessibilityNodeInfo?, packageName: String): String {
+        try {
+            val viewId = node?.viewIdResourceName ?: ""
+            val className = node?.className?.toString() ?: ""
+            
+            // Create a unique identifier for the field
+            // For DeepSeek, use a more specific identifier
+            return when (packageName) {
+                "com.deepseek.chat" -> {
+                    // DeepSeek specific field ID
+                    "${packageName}_${viewId}_${className}_deepseek"
+                }
+                else -> {
+                    // Default field ID for other apps
+                    "${packageName}_${viewId}_${className}"
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error generating field ID", e)
+            return "${packageName}_unknown_${System.currentTimeMillis()}"
+        }
+    }
+    
+    private fun isFieldBlocked(node: AccessibilityNodeInfo?, packageName: String): Boolean {
+        val fieldId = generateFieldId(node, packageName)
+        
+        Log.d(TAG, "🔍 Checking if field $fieldId is blocked in $packageName")
+        
+        // Check if field has undo flag set (true = blocked from detection)
+        if (fieldUndoFlags[fieldId] == true) {
+            Log.d(TAG, "🚫 Field $fieldId has undo flag set, checking if empty")
+            // Check if the field is now empty and reset flag if needed
+            if (isFieldActuallyEmpty(node, packageName)) {
+                fieldUndoFlags[fieldId] = false
+                Log.d(TAG, "✅ Field $fieldId is now empty, resetting undo flag immediately")
+                return false
+            }
+            
+            Log.d(TAG, "🚫 Field $fieldId blocked due to undo flag")
+            return true
+        }
+        
+        Log.d(TAG, "✅ Field $fieldId not blocked")
+        return false
+    }
+    
+    // Removed old blockedFields system - now using fieldUndoFlags only
+    
+    private fun checkAndResetUndoFlagsImmediately(node: AccessibilityNodeInfo?, packageName: String) {
+        try {
+            Log.d(TAG, "🔄 Checking for flag reset in $packageName - Active flags: ${fieldUndoFlags.filter { it.value }.keys}")
+            
+            val flagsToReset = mutableSetOf<String>()
+            
+            fieldUndoFlags.forEach { (fieldId, isBlocked) ->
+                if (isBlocked) {
+                    // Check if this field matches the current package
+                    val parts = fieldId.split("_", limit = 3)
+                    if (parts.size >= 3 && parts[0] == packageName) {
+                        Log.d(TAG, "🔍 Checking field $fieldId for emptiness")
+                        // Check if the current field is empty
+                        if (isFieldActuallyEmpty(node, packageName)) {
+                            flagsToReset.add(fieldId)
+                            Log.d(TAG, "✅ Field $fieldId is now empty, resetting undo flag immediately")
+                        } else {
+                            Log.d(TAG, "❌ Field $fieldId is not empty yet")
+                        }
+                    }
+                }
+            }
+            
+            // Reset flags for empty fields
+            flagsToReset.forEach { fieldId ->
+                fieldUndoFlags[fieldId] = false
+                Log.d(TAG, "🔄 Flag reset: $fieldId = false")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking and resetting undo flags immediately", e)
+        }
+    }
+    
+    private fun checkAndResetUndoFlags() {
+        try {
+            val flagsToReset = mutableSetOf<String>()
+            
+            fieldUndoFlags.forEach { (fieldId, isBlocked) ->
+                if (isBlocked) {
+                    // Check if the field is now empty
+                    val parts = fieldId.split("_", limit = 3)
+                    if (parts.size >= 3) {
+                        val packageName = parts[0]
+                        val viewId = parts[1]
+                        val className = parts[2]
+                        
+                        // Try to find the field and check if it's empty
+                        rootInActiveWindow?.let { root ->
+                            val isEmpty = checkFieldIsEmpty(root, viewId, className)
+                            if (isEmpty) {
+                                flagsToReset.add(fieldId)
+                                Log.d(TAG, "Field $fieldId is now empty, resetting undo flag")
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Reset flags for empty fields
+            flagsToReset.forEach { fieldId ->
+                fieldUndoFlags[fieldId] = false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking and resetting undo flags", e)
+        }
+    }
+    
+    private fun isFieldActuallyEmpty(node: AccessibilityNodeInfo?, packageName: String): Boolean {
+        if (node == null) return false
+        
+        try {
+            // Check if this node is editable and has text
+            if (node.isEditable) {
+                val text = node.text?.toString() ?: ""
+                
+                // Enhanced emptiness check for different apps
+                val isEmpty = when (packageName) {
+                    "com.whatsapp" -> {
+                        // WhatsApp shows "Message..." by default, so we need to check if it's just the placeholder
+                        text.isBlank() || text.trim() == "Message..." || text.trim() == "Message" || 
+                        text.trim().isEmpty() || text.trim().length <= 10 // Consider short text as empty
+                    }
+                    "com.instagram.android" -> {
+                        // Instagram shows "Message..." by default
+                        text.isBlank() || text.trim() == "Message..." || text.trim() == "Message" || 
+                        text.trim().isEmpty() || text.trim().length <= 10
+                    }
+                    "com.google.android.apps.messaging" -> {
+                        // Google Messages shows "Text message" when empty
+                        text.isBlank() || text.trim() == "Text message" || text.trim() == "Message" || 
+                        text.trim().isEmpty() || text.trim().length <= 15
+                    }
+                    "com.openai.chatgpt" -> {
+                        // ChatGPT - consider short text as empty (user likely cleared it)
+                        text.isBlank() || text.trim().isEmpty() || text.trim().length <= 5
+                    }
+                    "com.deepseek.chat" -> {
+                        // DeepSeek - consider short text as empty and check for placeholder
+                        text.isBlank() || text.trim().isEmpty() || text.trim().length <= 5 || 
+                        text.trim() == "Message DeepSeek..." || text.trim() == "Message DeepSeek"
+                    }
+                    else -> {
+                        // Default check for other apps
+                        text.isBlank() || text.trim().isEmpty()
+                    }
+                }
+                
+                Log.d(TAG, "🔍 Field emptiness check for $packageName: '${text.take(30)}...' (isEmpty: $isEmpty)")
+                return isEmpty
+            }
+            
+            // If not editable, check if it's a container with editable children
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i)
+                if (child != null && isFieldActuallyEmpty(child, packageName)) {
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking field actual emptiness", e)
+        }
+        
+        return false
+    }
+    
+    private fun checkFieldIsEmpty(rootNode: AccessibilityNodeInfo?, viewId: String, className: String): Boolean {
+        if (rootNode == null) return false
+        
+        try {
+            if (rootNode.viewIdResourceName == viewId && rootNode.className?.toString() == className) {
+                val text = rootNode.text?.toString() ?: ""
+                
+                // Get package name from the root node
+                val packageName = rootNode.packageName?.toString() ?: ""
+                
+                // Enhanced emptiness check for different apps
+                return when (packageName) {
+                    "com.whatsapp" -> {
+                        // WhatsApp shows "Message..." when empty
+                        text.isBlank() || text.trim() == "Message..." || text.trim() == "Message"
+                    }
+                    "com.instagram.android" -> {
+                        // Instagram shows "Message..." when empty
+                        text.isBlank() || text.trim() == "Message..." || text.trim() == "Message"
+                    }
+                    "com.google.android.apps.messaging" -> {
+                        // Google Messages shows "Text message" when empty
+                        text.isBlank() || text.trim() == "Text message" || text.trim() == "Message"
+                    }
+                    "com.openai.chatgpt" -> {
+                        // ChatGPT - consider short text as empty (user likely cleared it)
+                        text.isBlank() || text.trim().isEmpty() || text.trim().length <= 5
+                    }
+                    "com.deepseek.chat" -> {
+                        // DeepSeek - consider short text as empty and check for placeholder
+                        text.isBlank() || text.trim().isEmpty() || text.trim().length <= 5 || 
+                        text.trim() == "Message DeepSeek..." || text.trim() == "Message DeepSeek"
+                    }
+                    else -> {
+                        // Default check for other apps
+                        text.isBlank()
+                    }
+                }
+            }
+            
+            // Recursively check child nodes
+            for (i in 0 until rootNode.childCount) {
+                val isEmpty = checkFieldIsEmpty(rootNode.getChild(i), viewId, className)
+                if (isEmpty) return true
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error checking field emptiness", e)
+        }
+        
+        return false
+    }
+    
+    private fun showUndoSuccessFeedback() {
+        // Show a brief success message
+        serviceScope.launch(Dispatchers.Main) {
+            try {
+                val toast = Toast.makeText(this@RealTimeDetectionService, "Text restored successfully (field protected until cleared)", Toast.LENGTH_LONG)
+                toast.show()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error showing undo success feedback", e)
+            }
+        }
+    }
+    
+    private fun showUndoFailureFeedback() {
+        // Show a brief failure message
+        serviceScope.launch(Dispatchers.Main) {
+            try {
+                val toast = Toast.makeText(this@RealTimeDetectionService, "Could not restore text - field unavailable", Toast.LENGTH_SHORT)
+                toast.show()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error showing undo failure feedback", e)
+            }
+        }
+    }
+    
+    private fun showManualResetFeedback() {
+        // Show a brief success message for manual reset
+        serviceScope.launch(Dispatchers.Main) {
+            try {
+                val toast = Toast.makeText(this@RealTimeDetectionService, "Field protection reset successfully", Toast.LENGTH_SHORT)
+                toast.show()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error showing manual reset feedback", e)
             }
         }
     }

@@ -416,6 +416,16 @@ class LanguageModelService(private val context: Context) {
             "keylogger", "cctv", "grades", "system", "security", "cyber", "breach"
         )
         
+        // 2.5. HARMFUL CONTENT PATTERNS (Self-harm, Violence, etc.)
+        val harmfulContentPatterns = listOf(
+            "how to kill", "kill myself", "kill yourself", "commit suicide", "end my life",
+            "take my life", "self harm", "self-harm", "cut myself", "hurt myself",
+            "harm myself", "die", "death", "murder", "assassinate", "shoot", "stab",
+            "poison", "overdose", "hang myself", "jump off", "crash car", "drive into",
+            "violent", "violence", "attack", "fight", "beat up", "punch", "kick",
+            "threaten", "threat", "harm", "hurt", "injure", "wound", "bleed", "blood"
+        )
+        
         // 3. IMAGE/VIDEO MISUSE PATTERNS
         val imageVideoPatterns = listOf(
             "replace face", "swap face", "face swap", "face replacement", "make a video where",
@@ -423,7 +433,10 @@ class LanguageModelService(private val context: Context) {
             "replace face with", "face editing", "face morph", "face blend", "face overlay",
             "face merge", "face composite", "face superimpose", "impersonate", "pretend to be",
             "prank", "cartoon character", "celebrity body", "movie actor", "action scene",
-            "instagram reel", "deepfake", "manipulation"
+            "instagram reel", "deepfake", "manipulation", "create deepfake", "generate deepfake",
+            "make deepfake", "create fake video", "generate fake video", "make fake video",
+            "create fake photo", "generate fake photo", "make fake photo", "face swap with",
+            "replace face with", "swap face with", "put face on", "face manipulation"
         )
         
         // 4. EXPLOSIVES/WEAPONS PATTERNS
@@ -444,9 +457,10 @@ class LanguageModelService(private val context: Context) {
             "hallucinate", "get high", "feel better", "inject", "snort", "smoke", "mix"
         )
         
-        // Check for patterns - 5 CATEGORIES
+        // Check for patterns - 6 CATEGORIES
         val hasPersonalData = personalDataPatterns.any { lowerPrompt.contains(it) }
         val hasHacking = hackingPatterns.any { lowerPrompt.contains(it) }
+        val hasHarmfulContent = harmfulContentPatterns.any { lowerPrompt.contains(it) }
         val hasImageVideo = imageVideoPatterns.any { lowerPrompt.contains(it) }
         val hasExplosives = explosivesPatterns.any { lowerPrompt.contains(it) }
         val hasDrugs = drugsPatterns.any { lowerPrompt.contains(it) }
@@ -464,7 +478,7 @@ class LanguageModelService(private val context: Context) {
             hasPersonalData -> PromptAnalysisResponse(
                 isMisuse = true,
                 confidence = if (hasIntent) 0.95 else 0.85,
-                reason = "Fallback analysis detected potential personal data/privacy violation",
+                reason = "Potential personal data/privacy violation detected",
                 category = MisuseCategory.PRIVACY_VIOLATION,
                 suggestions = listOf(
                     "Protect personal and sensitive information",
@@ -476,7 +490,7 @@ class LanguageModelService(private val context: Context) {
             hasHacking -> PromptAnalysisResponse(
                 isMisuse = true,
                 confidence = if (hasIntent) 0.95 else 0.85,
-                reason = "Fallback analysis detected potential hacking/security bypass request",
+                reason = "Potential hacking/security bypass request detected",
                 category = MisuseCategory.HARMFUL_CONTENT,
                 suggestions = listOf(
                     "Avoid requesting hacking tutorials or security bypass methods",
@@ -485,10 +499,22 @@ class LanguageModelService(private val context: Context) {
                 ),
                 metadata = mapOf("analysis_method" to "enhanced_fallback")
             )
+            hasHarmfulContent -> PromptAnalysisResponse(
+                isMisuse = true,
+                confidence = if (hasIntent) 0.98 else 0.9,
+                reason = "Potential harmful content or self-harm detected",
+                category = MisuseCategory.HARMFUL_CONTENT,
+                suggestions = listOf(
+                    "If you're having thoughts of self-harm, please seek help immediately",
+                    "Contact a mental health professional or crisis hotline",
+                    "You're not alone - help is available 24/7"
+                ),
+                metadata = mapOf("analysis_method" to "enhanced_fallback")
+            )
             hasImageVideo -> PromptAnalysisResponse(
                 isMisuse = true,
-                confidence = if (hasIntent) 0.85 else 0.75,
-                reason = "Fallback analysis detected potential image/video manipulation request",
+                confidence = if (hasIntent) 0.95 else 0.85,
+                reason = "Potential image/video manipulation request detected",
                 category = MisuseCategory.DEEPFAKE,
                 suggestions = listOf(
                     "Avoid unauthorized face swapping or video manipulation",
@@ -500,7 +526,7 @@ class LanguageModelService(private val context: Context) {
             hasExplosives -> PromptAnalysisResponse(
                 isMisuse = true,
                 confidence = if (hasIntent) 0.98 else 0.9,
-                reason = "Fallback analysis detected potential explosives/weapons request",
+                reason = "Potential explosives/weapons request detected",
                 category = MisuseCategory.HARMFUL_CONTENT,
                 suggestions = listOf(
                     "Avoid requesting information about explosives or weapons",
@@ -512,7 +538,7 @@ class LanguageModelService(private val context: Context) {
             hasDrugs -> PromptAnalysisResponse(
                 isMisuse = true,
                 confidence = if (hasIntent) 0.95 else 0.85,
-                reason = "Fallback analysis detected potential drug/substance abuse request",
+                reason = "Potential drug/substance abuse request detected",
                 category = MisuseCategory.HARMFUL_CONTENT,
                 suggestions = listOf(
                     "Avoid requesting information about illegal drugs or substances",
@@ -524,7 +550,7 @@ class LanguageModelService(private val context: Context) {
             else -> PromptAnalysisResponse(
                 isMisuse = false,
                 confidence = 0.9,
-                reason = "Fallback analysis found no significant misuse patterns",
+                reason = "No significant misuse patterns found",
                 category = MisuseCategory.NONE,
                 suggestions = listOf("Content appears safe", "Continue creating"),
                 metadata = mapOf("analysis_method" to "enhanced_fallback")

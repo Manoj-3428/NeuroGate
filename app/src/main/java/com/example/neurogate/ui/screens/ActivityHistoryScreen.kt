@@ -6,58 +6,57 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.example.neurogate.data.DetectedActivity
-import com.example.neurogate.data.ActivityStorage
 import com.example.neurogate.ui.components.ActivityCard
-import com.example.neurogate.ui.components.CategoryChip
-import java.util.*
+import com.example.neurogate.ui.viewmodels.ActivityViewModel
+import com.example.neurogate.utils.AppNameUtils
+import getCategoryDisplayName
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ActivityHistoryScreen(
-    activityStorage: ActivityStorage,
+    viewModel: ActivityViewModel,
     onBackClick: () -> Unit
 ) {
     var selectedCategory by remember { mutableStateOf<String?>(null) }
     var selectedApp by remember { mutableStateOf<String?>(null) }
     var showFilterDialog by remember { mutableStateOf(false) }
     
-    // Memoize the activities flow to prevent recreation
-    val activitiesFlow = remember(selectedCategory, selectedApp) {
-        if (selectedCategory != null) {
-            activityStorage.getActivitiesByCategory(selectedCategory!!)
-        } else if (selectedApp != null) {
-            activityStorage.getActivitiesByApp(selectedApp!!)
-        } else {
-            activityStorage.getAllActivities()
-        }
-    }
-    
-    val activities by activitiesFlow.collectAsState(initial = emptyList())
+    val activities by viewModel.activities.collectAsState()
+    val context = LocalContext.current
     
     // Optimize list state
     val listState = rememberLazyListState()
+    
+    // Filter activities based on selected filters
+    val filteredActivities = remember(activities, selectedCategory, selectedApp) {
+        activities.filter { activity ->
+            val categoryMatch = selectedCategory == null || activity.category == selectedCategory
+            val appMatch = selectedApp == null || activity.packageName == selectedApp
+            categoryMatch && appMatch
+        }
+    }
     
     // Memoize filter chips
     val filterChips = remember(selectedCategory, selectedApp) {
         buildList {
             if (selectedCategory != null) {
-                add(FilterChipData(selectedCategory!!, FilterType.CATEGORY))
+                add(FilterChipData(getCategoryDisplayName(selectedCategory!!), FilterType.CATEGORY))
             }
             if (selectedApp != null) {
-                add(FilterChipData(selectedApp!!, FilterType.APP))
+                add(FilterChipData(AppNameUtils.getAppName(context, selectedApp!!), FilterType.APP))
             }
         }
     }
@@ -107,7 +106,7 @@ fun ActivityHistoryScreen(
         }
         
         // Activities List
-        if (activities.isEmpty()) {
+        if (filteredActivities.isEmpty()) {
             EmptyStateContent()
         } else {
             LazyColumn(
@@ -117,7 +116,7 @@ fun ActivityHistoryScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(
-                    items = activities,
+                    items = filteredActivities,
                     key = { it.id }
                 ) { activity ->
                     ActivityCard(activity = activity)
@@ -140,7 +139,7 @@ fun ActivityHistoryScreen(
                 selectedCategory = null
                 showFilterDialog = false
             },
-            activityStorage = activityStorage
+            viewModel = viewModel
         )
     }
 }
@@ -185,14 +184,17 @@ fun FilterDialog(
     onDismiss: () -> Unit,
     onCategorySelected: (String) -> Unit,
     onAppSelected: (String) -> Unit,
-    activityStorage: ActivityStorage
+    viewModel: ActivityViewModel
 ) {
     var categories by remember { mutableStateOf<List<String>>(emptyList()) }
     var apps by remember { mutableStateOf<List<String>>(emptyList()) }
+    val context = LocalContext.current
     
     LaunchedEffect(Unit) {
-        categories = activityStorage.getAllCategories()
-        apps = activityStorage.getAllApps()
+        // Get unique categories and apps from current activities
+        val currentActivities = viewModel.activities.value
+        categories = currentActivities.map { it.category }.distinct().sorted()
+        apps = currentActivities.map { it.packageName }.distinct().sorted()
     }
     
     AlertDialog(
@@ -212,7 +214,7 @@ fun FilterDialog(
                         key = { it }
                     ) { category ->
                         Text(
-                            text = category.replace("_", " "),
+                            text = getCategoryDisplayName(category),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onCategorySelected(category) }
@@ -234,7 +236,7 @@ fun FilterDialog(
                         key = { it }
                     ) { app ->
                         Text(
-                            text = app,
+                            text = AppNameUtils.getAppName(context, app),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onAppSelected(app) }
@@ -252,3 +254,5 @@ fun FilterDialog(
         }
     )
 }
+
+

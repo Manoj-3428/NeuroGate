@@ -895,7 +895,7 @@ class MockAIService : AIService {
             "face swap video", "faceswap vid", "face swp vid",
             "video manipulation", "vid manipulation", "video maniplation",
             "video editing", "vid editing", "video edting",
-
+             
             // Impersonation terms
             "impersonate", "impersonat", "impersnate", "impersont",
             "pretend to be", "pretend to b", "pretnd to be",

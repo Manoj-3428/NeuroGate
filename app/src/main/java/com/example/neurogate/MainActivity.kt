@@ -12,6 +12,9 @@ import androidx.compose.ui.Modifier
 import com.example.neurogate.navigation.AppNavigation
 import com.example.neurogate.ui.AIDetectionViewModel
 import com.example.neurogate.ui.AIDetectionViewModelFactory
+import com.example.neurogate.data.AppDatabase
+import com.example.neurogate.data.ActivityRepository
+import com.example.neurogate.ui.viewmodels.ActivityViewModel
 import com.example.neurogate.ui.theme.NeuroGateTheme
 import com.example.neurogate.service.DetectionServiceManager
 import com.example.neurogate.service.PermissionManager
@@ -25,6 +28,7 @@ class MainActivity : ComponentActivity() {
     
     private lateinit var detectionServiceManager: DetectionServiceManager
     private lateinit var permissionManager: PermissionManager
+    private lateinit var activityViewModel: ActivityViewModel
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,6 +38,11 @@ class MainActivity : ComponentActivity() {
         detectionServiceManager = DetectionServiceManager(this)
         permissionManager = PermissionManager(this)
         
+        // Initialize Room database and ViewModel
+        val database = AppDatabase.getDatabase(this)
+        val repository = ActivityRepository(database.detectedActivityDao())
+        activityViewModel = ActivityViewModel(repository)
+        
         setContent {
             NeuroGateTheme {
                 Surface(
@@ -42,6 +51,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     AppNavigation(
                         viewModel = viewModel,
+                        activityViewModel = activityViewModel,
                         detectionServiceManager = detectionServiceManager,
                         permissionManager = permissionManager
                     )
